@@ -601,18 +601,12 @@ void mlir::torch::onnx_c::populateDefaultDomainAtoF(
                       binder.op, resultType, operand);
                   return success();
                 });
-  // onnx.Clip with min/max as arguments introduced in opset 11
   patterns.onOp(
-      "Clip", 11, [](OpBinder binder, ConversionPatternRewriter &rewriter) {
+      "Clip", 1, [](OpBinder binder, ConversionPatternRewriter &rewriter) {
         // https://onnx.ai/onnx/operators/onnx__Clip.html
-        // Note: version 13 added 'bfloat16' support
-        // Note: version 12 added 'int16', 'int32', etc. support
-        // We could check each of those against the specific versions... or
-        // just let them through.
-
-        // Inputs and outputs must be tensors. Min and max are both optional
-        // and if provided must be "tensors of empty shape" (scalars).
         Value source;
+        Value min;
+        Value max;
         Torch::ValueTensorType resultType;
         if (binder.tensorOperandAtIndex(source, 0) ||
             binder.tensorResultType(resultType)) {
@@ -620,51 +614,51 @@ void mlir::torch::onnx_c::populateDefaultDomainAtoF(
         }
 
         if (binder.op->getNumOperands() == 1) {
-          // Cliping between numeric_limits::lowest() and numeric_limits::max()
-          // is a no-op.
+          auto resultDtype = resultType.getDtype();
+
+          float minValue;
+          if (binder.op->hasAttr("torch.onnx.min")) {
+            if (binder.f32FloatAttr(minValue, "min"))
+              return failure();
+            auto minSplatAttr = SplatElementsAttr::get(
+                resultType.toBuiltinTensor().clone(resultDtype),
+                rewriter.getFloatAttr(resultDtype, minValue));
+            min = rewriter.create<Torch::ValueTensorLiteralOp>(
+                binder.getLoc(), resultType, minSplatAttr);
+          } else {
+            min = rewriter.create<Torch::ConstantNoneOp>(binder.getLoc());
+          }
+
+          float maxValue;
+          if (binder.op->hasAttr("torch.onnx.max")) {
+            if (binder.f32FloatAttr(maxValue, "max"))
+              return failure();
+            auto maxSplatAttr = SplatElementsAttr::get(
+                resultType.toBuiltinTensor().clone(resultDtype),
+                rewriter.getFloatAttr(resultDtype, maxValue));
+            max = rewriter.create<Torch::ValueTensorLiteralOp>(
+                binder.getLoc(), resultType, maxSplatAttr);
+          } else {
+            max = rewriter.create<Torch::ConstantNoneOp>(binder.getLoc());
+          }
+        } else if (binder.op->getNumOperands() == 2) {
+          min = binder.op->getOperand(1);
+        } else if (binder.op->getNumOperands() == 3) {
+          min = binder.op->getOperand(1);
+          max = binder.op->getOperand(2);
+        } else {
+          return failure();
+        }
+
+        if (max.getType().isa<Torch::NoneType>()) {
+          rewriter.replaceOpWithNewOp<Torch::AtenClampMinTensorOp>(
+              binder.op, resultType, source, min);
+          return success();
+        } else if (max.getType().isa<Torch::NoneType>()) {
+          // Cliping with no limits is a no-op.
           rewriter.replaceOp(binder.op, source);
           return success();
-        } else if (binder.op->getNumOperands() == 2) {
-          rewriter.replaceOpWithNewOp<Torch::AtenClampMinTensorOp>(
-              binder.op, resultType, source, /*min=*/binder.op->getOperand(1));
-          return success();
-        } else if (binder.op->getNumOperands() == 3) {
-          rewriter.replaceOpWithNewOp<Torch::AtenClampTensorOp>(
-              binder.op, resultType, source, /*min=*/binder.op->getOperand(1),
-              /*max=*/binder.op->getOperand(2));
-          return success();
         }
-        return failure();
-      });
-  // onnx.Clip with min/max as attributes
-  patterns.onOp(
-      "Clip", 1, [](OpBinder binder, ConversionPatternRewriter &rewriter) {
-        // https://onnx.ai/onnx/operators/onnx__Clip.html
-        // Note: version 6 has optional attributes with default min/max values.
-        Value source;
-        float minValue;
-        float maxValue;
-        Torch::ValueTensorType resultType;
-        if (binder.tensorOperand(source) ||
-            binder.tensorResultType(resultType) ||
-            binder.f32FloatAttr(minValue, "min",
-                                std::numeric_limits<float>::min()) ||
-            binder.f32FloatAttr(maxValue, "max",
-                                std::numeric_limits<float>::max()))
-          return failure();
-
-        // Pull attribute values down into constants.
-        auto dtype = resultType.getDtype();
-        auto minSplatAttr =
-            SplatElementsAttr::get(resultType.toBuiltinTensor().clone(dtype),
-                                   rewriter.getFloatAttr(dtype, minValue));
-        auto maxSplatAttr =
-            SplatElementsAttr::get(resultType.toBuiltinTensor().clone(dtype),
-                                   rewriter.getFloatAttr(dtype, maxValue));
-        Value min = rewriter.create<Torch::ValueTensorLiteralOp>(
-            binder.getLoc(), resultType, minSplatAttr);
-        Value max = rewriter.create<Torch::ValueTensorLiteralOp>(
-            binder.getLoc(), resultType, maxSplatAttr);
 
         rewriter.replaceOpWithNewOp<Torch::AtenClampTensorOp>(
             binder.op, resultType, source, min, max);
