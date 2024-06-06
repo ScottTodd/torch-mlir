@@ -26,7 +26,9 @@
 #include "torch-mlir/Dialect/TorchConversion/Transforms/BackendTypeConversion.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 using namespace mlir::torch;
@@ -678,6 +680,15 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     if (failed(verifyLinalgCompatibleTypes(op, rewriter)))
       return failure();
+
+    llvm::dbgs() << "// --- ConvertAtenIndexPutHackedTwinOp ---\n";
+    op.dump();
+    llvm::dbgs() << "\n  // op.getValues():\n  ";
+    op.getValues().dump();
+    llvm::dbgs() << "\n  // op.getIndices():\n  ";
+    op.getIndices().dump();
+    llvm::dbgs() << "\n";
+
     Location loc = op.getLoc();
     MLIRContext *context = op->getContext();
     Value input = op.getSelf();
@@ -751,6 +762,8 @@ public:
     // Indices are extended, catted, and collapsed into a [batch, depth] tensor:
     Value indices = combinePutIndices(loc, indicesList, rewriter);
 
+    // TODO(scotttodd): broadcast values[0]
+
     // Bove batch dimensions to the front and collapse into a single dim:
     values =
         collapseAndMoveBatchDims(loc, values, batchDim, numBatchDims, rewriter);
@@ -809,6 +822,12 @@ public:
         rewriter, loc, typeConverter->convertType(values.getType()), values);
     indices = typeConverter->materializeTargetConversion(
         rewriter, loc, typeConverter->convertType(indices.getType()), indices);
+
+    llvm::dbgs() << "// --- Creating TMTensorScatterOp with indices:\n  ";
+    indices.dump();
+    llvm::dbgs() << "  // --- and values/updates:\n  ";
+    values.dump();
+    llvm::dbgs() << "\n";
 
     // Creating a tm_tensor.scatter op with the following mapping:
     // 1.) Index tensor from the `indicesList` maps to the indices in scatter

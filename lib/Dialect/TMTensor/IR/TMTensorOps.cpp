@@ -537,6 +537,20 @@ LogicalResult ScatterOp::verify() {
     return op->emitOpError("expected one output operand");
   }
   auto checkDimensionsMatch = [&](ShapedType t1, ShapedType t2, unsigned dim) {
+    llvm::dbgs() << "// checkDimensionsMatch\n";
+    llvm::dbgs() << "//  dim: " << dim << "\n";
+
+    llvm::dbgs() << "//  indices.getShape(): [";
+    for (int i = 0; i < t1.getShape().size(); ++i) {
+      llvm::dbgs() << t1.getShape()[i] << ",";
+    }
+    llvm::dbgs() << "]\n";
+
+    llvm::dbgs() << "//  updates.getShape(): [";
+    for (int i = 0; i < t2.getShape().size(); ++i) {
+      llvm::dbgs() << t2.getShape()[i] << ",";
+    }
+    llvm::dbgs() << "]\n";
     return t1.getShape()[dim] == t2.getShape()[dim];
   };
 
